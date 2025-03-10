@@ -5,6 +5,7 @@ import requests
 import time
 import matplotlib.pyplot as plt
 from mplsoccer import VerticalPitch
+from datetime import datetime
 
 
 # URLs for StatsBomb Open Data
@@ -33,7 +34,7 @@ def load_events(match_id):
 # Data ophalen
 competitions = load_competitions()
 
-
+st.title("Bayer Leverkusen Match Analyzer")
 match_files = []
 for _, comp in competitions.iterrows():
     if comp['competition_id'] == 9 and comp['season_id'] == 281:
@@ -51,31 +52,34 @@ bayer_lever['opponent'] = bayer_lever.apply(
 bayer_lever['match_type'] = bayer_lever.apply(
     lambda row: 'Thuis' if row['home_team']['home_team_name'] == "Bayer Leverkusen" else 'Uit', axis=1)
 
-# Dropdown voor tegenstander
 opponent_selected = st.sidebar.selectbox("Selecteer een tegenstander", bayer_lever['opponent'].unique())
 
 # Filter wedstrijden op geselecteerde tegenstander
 filtered_matches = bayer_lever[bayer_lever['opponent'] == opponent_selected]
 
-# Dropdown voor matchday
-matchday_selected = st.sidebar.selectbox("Selecteer een matchday", filtered_matches['match_week'].unique())
-
-# Filter wedstrijden op geselecteerde matchday
-filtered_matches = filtered_matches[filtered_matches['match_week'] == matchday_selected]
-
 # Dropdown voor thuis/uit selectie
 home_or_away_selected = st.sidebar.selectbox("Was het een thuiswedstrijd of uitwedstrijd?", filtered_matches['match_type'].unique())
 
-# Filter op thuis/uit selectie
+# Filter wedstrijden op thuis/uit selectie
 filtered_matches = filtered_matches[filtered_matches['match_type'] == home_or_away_selected]
 
-# Dropdown voor specifieke wedstrijd
-match_selected = st.sidebar.selectbox("Selecteer een wedstrijd", filtered_matches['match_id'])
+# Na filtering zijn er geen extra keuzes nodig, dus de matchday en wedstrijd worden automatisch gefilterd
+if not filtered_matches.empty:
+    # Selecteer automatisch de matchday en wedstrijd (er blijft slechts 1 matchday en 1 wedstrijd over)
+    matchday_selected = filtered_matches['match_week'].iloc[0]
+    match_selected = filtered_matches['match_id'].iloc[0]
 
-# Toon de geselecteerde wedstrijd
-selected_match = filtered_matches[filtered_matches['match_id'] == match_selected].iloc[0]
-st.title("Bayer Leverkusen Match Analyzer")
-st.write(f"Geselecteerde wedstrijd: {selected_match['home_team']['home_team_name']} vs {selected_match['away_team']['away_team_name']} op {selected_match['match_date']} ({selected_match['match_type']})")
+    # Toon de gefilterde wedstrijd en matchday
+    selected_match = filtered_matches[filtered_matches['match_id'] == match_selected].iloc[0]
+    
+    # Verkrijg teamnamen, datum en type wedstrijd
+    home_team = selected_match['home_team']['home_team_name']
+    away_team = selected_match['away_team']['away_team_name']
+    match_date = datetime.strptime(selected_match['match_date'], '%Y-%m-%d').strftime('%d-%m-%Y')  # Datum omzetten naar dd-mm-yyyy
+    match_type = selected_match['match_type']
+
+    # Toon de zin met de details van de geselecteerde wedstrijd
+    st.write(f"Geselecteerde wedstrijd: {home_team} vs {away_team} op {match_date} (Matchday {matchday_selected})")
 
 df_test = pd.read_csv('df_test.csv')
 
@@ -85,8 +89,15 @@ if match_selected:
 
 
     
-start_game = st.button("Start Wedstrijd")
-stop_game = st.button("Stop Wedstrijd")
+# Maak twee kolommen
+col1, col2 = st.columns(2)
+
+# Voeg de knoppen toe in de kolommen
+with col1:
+    start_game = st.button("Start Wedstrijd")
+
+with col2:
+    stop_game = st.button("Stop Wedstrijd")
 
 
 # Variabele om te controleren of de wedstrijd aan of uit is
@@ -144,7 +155,7 @@ if game_running:
 
         for index, row in df_minute.iterrows():
             player = row["player"]
-            xg = row["Random Forest XG"]
+            xg = row["XG-Boost"]
             if player in player_xg:
                 player_xg[player] += xg
             else:
@@ -152,7 +163,7 @@ if game_running:
 
         # 1️⃣ **xG vs. Goals Grafiek**
         fig_xg, ax_xg = plt.subplots(figsize=(6, 4))
-        ax_xg.plot(match_minutes, xG_values, label="Random Forest XG", marker="o", color="blue")
+        ax_xg.plot(match_minutes, xG_values, label="XG-Boost XG", marker="o", color="blue")
         ax_xg.plot(match_minutes, goals_values, label="Doelpunten", marker="s", color="red")
         ax_xg.set_xlabel("Minuut")
         ax_xg.set_ylabel("Waarde")
@@ -160,33 +171,51 @@ if game_running:
         ax_xg.legend()
 
         plt.close(fig_xg)
+
         # 2️⃣ **Top 3 Spelers met de meeste xG tot nu toe**
         sorted_players = sorted(player_xg.items(), key=lambda x: x[1], reverse=True)
 
         top_3_players = sorted_players[:3]
 
-        players = [player for player, _ in top_3_players]
+        def get_display_name(full_name):
+            name_parts = full_name.split()
+            last_name = name_parts[-1]
+
+            # Specifieke aanpassing als 'Reyna' de laatste naam is
+            if last_name == "Reyna":
+                return "Hincapié"
+            
+            return last_name  # Standaard laatste naam
+
+        # Pas namen aan
+        players = [get_display_name(player) for player, _ in top_3_players] # Pak de achternaam
         xg_values = [xg for _, xg in top_3_players]
 
         # Maak een horizontale barchart
         fig, ax = plt.subplots(figsize=(6, 4))
         hbars = ax.barh(players, xg_values, color='seagreen')
 
-        # Voeg de xG-waarde toe als label aan de rechterkant van de balken
-        ax.bar_label(hbars, fmt='%.2f', color='black')
-
-        # Voeg de speler namen toe in het midden van de balken
+        # Voeg de xG-waarde toe als label **in** de balk
         for i, bar in enumerate(hbars):
             ax.text(bar.get_width() / 2, bar.get_y() + bar.get_height() / 2, 
-                    players[i], ha='center', va='center', color='white', fontweight='bold')
+                    f"{xg_values[i]:.2f}", ha='center', va='center', color='white', fontweight='bold')
 
-        ax.set_yticklabels([])  # Geen labels op de y-as
+        # Voeg de spelernaam **dichter bij de balk** toe
+        for i, (player, bar) in enumerate(zip(players, hbars)):
+            ax.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,  # Kleinere afstand
+                    player, ha='left', va='center', color='black')
+
+        # Alleen x- en y-as tonen, andere randen verbergen
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
         # Labels en titel
         ax.set_xlabel('xG (Expected Goals)')
         ax.set_ylabel('Speler')
         ax.set_title('Top 3 Spelers met de Meeste xG')
-
+        ax.set_yticklabels([])  # Geen labels op de y-as
         plt.close(fig)
+
 
         # 3️⃣ **Schoten op het veld**
         pitch = VerticalPitch(half=True, goal_type='box', pitch_color='#22312b', line_color='#c7d5cc')
